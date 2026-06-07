@@ -2,7 +2,7 @@ name: HuggingFace Keepalive
 
 on:
   schedule:
-    - cron: '*/5 * * * *'   # 每 5 分钟触发一次
+    - cron: '*/5 * * * *'
   workflow_dispatch:
 
 jobs:
@@ -13,22 +13,21 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          # 通过 HF API 查询 space 运行状态（同时起到唤醒作用）
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-            --max-time 30 \
+          # 查询 space 状态
+          RESULT=$(curl -s --max-time 30 \
             -H "Authorization: Bearer $HF_TOKEN" \
-            "https://huggingface.co/api/spaces/aliliyou/cto/running-status")
-          echo "API Status: $STATUS"
+            "https://huggingface.co/api/spaces/aliliyou/cto")
+          STAGE=$(echo "$RESULT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('runtime',{}).get('stage','unknown'))" 2>/dev/null || echo "unknown")
+          echo "Space stage: $STAGE"
 
-          # 直接访问 space URL 触发唤醒
-          SPACE_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-            --max-time 30 \
+          # 直接访问 space 触发唤醒
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 \
             -H "Authorization: Bearer $HF_TOKEN" \
             "https://aliliyou-cto.hf.space/")
-          echo "Space Status: $SPACE_STATUS"
+          echo "HTTP Status: $STATUS"
 
-          if [ "$SPACE_STATUS" -ge 200 ] && [ "$SPACE_STATUS" -lt 400 ]; then
-            echo "✅ Space is alive"
+          if [ "$STAGE" = "RUNNING" ]; then
+            echo "✅ Space is running"
           else
-            echo "⚠️  Space returned $SPACE_STATUS — may be waking up"
+            echo "⚠️  Space stage=$STAGE, HTTP=$STATUS"
           fi
