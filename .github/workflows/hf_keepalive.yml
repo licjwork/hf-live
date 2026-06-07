@@ -3,20 +3,32 @@ name: HuggingFace Keepalive
 on:
   schedule:
     - cron: '*/5 * * * *'   # 每 5 分钟触发一次
-  workflow_dispatch:         # 支持手动触发
+  workflow_dispatch:
 
 jobs:
   ping:
     runs-on: ubuntu-latest
     steps:
       - name: Ping HuggingFace Space
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
+          # 通过 HF API 查询 space 运行状态（同时起到唤醒作用）
           STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
             --max-time 30 \
+            -H "Authorization: Bearer $HF_TOKEN" \
+            "https://huggingface.co/api/spaces/aliliyou/cto/running-status")
+          echo "API Status: $STATUS"
+
+          # 直接访问 space URL 触发唤醒
+          SPACE_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            --max-time 30 \
+            -H "Authorization: Bearer $HF_TOKEN" \
             "https://aliliyou-cto.hf.space/")
-          echo "HTTP Status: $STATUS"
-          if [ "$STATUS" -ge 200 ] && [ "$STATUS" -lt 400 ]; then
+          echo "Space Status: $SPACE_STATUS"
+
+          if [ "$SPACE_STATUS" -ge 200 ] && [ "$SPACE_STATUS" -lt 400 ]; then
             echo "✅ Space is alive"
           else
-            echo "⚠️  Got status $STATUS"
+            echo "⚠️  Space returned $SPACE_STATUS — may be waking up"
           fi
