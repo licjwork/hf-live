@@ -13,21 +13,23 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          # 查询 space 状态
           RESULT=$(curl -s --max-time 30 \
             -H "Authorization: Bearer $HF_TOKEN" \
             "https://huggingface.co/api/spaces/aliliyou/cto")
-          STAGE=$(echo "$RESULT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('runtime',{}).get('stage','unknown'))" 2>/dev/null || echo "unknown")
+          echo "API response: $RESULT"
+          STAGE=$(echo "$RESULT" | python3 -c "
+import sys, json
+try:
+    d = json.load(sys.stdin)
+    # 尝试多个路径
+    stage = d.get('runtime', {}).get('stage') or d.get('stage') or 'unknown'
+    print(stage)
+except Exception as e:
+    print('parse_error:' + str(e))
+" 2>/dev/null || echo "unknown")
           echo "Space stage: $STAGE"
-
-          # 直接访问 space 触发唤醒
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 \
-            -H "Authorization: Bearer $HF_TOKEN" \
-            "https://aliliyou-cto.hf.space/")
-          echo "HTTP Status: $STATUS"
-
-          if [ "$STAGE" = "RUNNING" ]; then
+          if [ "$STAGE" = "RUNNING" ] || [ "$STAGE" = "RUNNING_BUILDING" ]; then
             echo "✅ Space is running"
           else
-            echo "⚠️  Space stage=$STAGE, HTTP=$STATUS"
+            echo "⚠️  Space stage=$STAGE"
           fi
