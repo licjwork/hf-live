@@ -1,0 +1,22 @@
+name: HuggingFace Keepalive
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'   # 每 5 分钟触发一次
+  workflow_dispatch:         # 支持手动触发
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping HuggingFace Space
+        run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            --max-time 30 \
+            "https://aliliyou-cto.hf.space/")
+          echo "HTTP Status: $STATUS"
+          if [ "$STATUS" -ge 200 ] && [ "$STATUS" -lt 400 ]; then
+            echo "✅ Space is alive"
+          else
+            echo "⚠️  Got status $STATUS"
+          fi
