@@ -1,4 +1,4 @@
-name: HuggingFace Keepalive with sing-box + Hysteria2
+name: HuggingFace Keepalive with Hysteria2
 
 on:
   schedule:
@@ -15,32 +15,24 @@ jobs:
   ping:
     runs-on: ubuntu-latest
     steps:
-      - name: Random sleep between 0 and 4 hours
+      - name: Random sleep
         if: ${{ !github.event.inputs.skip_sleep }}
-        run: |
-          MAX_SLEEP=$((RANDOM % 14400))
-          echo "Sleeping $MAX_SLEEP seconds to randomize interval"
-          sleep $MAX_SLEEP
+        run: sleep $((RANDOM % 14400))
 
       - name: Install sing-box
         run: |
           wget -q https://github.com/SagerNet/sing-box/releases/download/v1.12.9/sing-box-1.12.9-linux-amd64.tar.gz
-          tar -xzf sing-box-1.12.9-linux-amd64.tar.gz
-          sudo mv sing-box-1.12.9-linux-amd64/sing-box /usr/local/bin/
+          tar -xzf sing-box-*.tar.gz
+          sudo mv sing-box-*/sing-box /usr/local/bin/
           sing-box version
 
-      - name: Generate Hysteria2 config
+      - name: Create config
         run: |
           cat > config.json << 'EOF'
           {
-            "log": {
-              "level": "warn",
-              "timestamp": true
-            },
             "inbounds": [
               {
                 "type": "http",
-                "tag": "http-in",
                 "listen": "127.0.0.1",
                 "listen_port": 8080
               }
@@ -48,85 +40,45 @@ jobs:
             "outbounds": [
               {
                 "type": "hysteria2",
-                "tag": "hy2-out",
-                "server": "${{ secrets.HY2_SERVER }}",
-                "server_port": ${{ secrets.HY2_PORT }},
-                "password": "${{ secrets.HY2_PASSWORD }}",
+                "server": "YOUR_SERVER_HERE",
+                "server_port": 443,
+                "password": "YOUR_PASSWORD_HERE",
                 "tls": {
-                  "enabled": true,
-                  "server_name": "${{ secrets.HY2_SNI }}",
-                  "insecure": ${{ secrets.HY2_INSECURE || 'true' }}
+                  "insecure": true
                 }
               }
             ]
           }
           EOF
           
-          # 验证 JSON 格式
-          echo "Config content:"
+          # 替换变量（用 sed 更安全）
+          sed -i "s/YOUR_SERVER_HERE/${{ secrets.HY2_SERVER }}/g" config.json
+          sed -i "s/YOUR_PASSWORD_HERE/${{ secrets.HY2_PASSWORD }}/g" config.json
+          sed -i "s/443/${{ secrets.HY2_PORT }}/g" config.json
+          
+          echo "=== Generated config ==="
           cat config.json
           echo ""
-          echo "Validating JSON..."
-          python3 -m json.tool config.json > /dev/null && echo "✓ JSON is valid" || echo "✗ JSON is invalid"
+          echo "=== Validating JSON ==="
+          python3 -m json.tool config.json > /dev/null 2>&1 && echo "✓ JSON valid" || echo "✗ JSON invalid"
 
-      - name: Start sing-box Hysteria2 client
+      - name: Start proxy
         run: |
-          # 后台启动 sing-box
-          sudo /usr/local/bin/sing-box run -c config.json &
-          
-          # 等待代理启动
-          echo "Waiting for proxy to start..."
+          sudo /usr/local/bin/sing-box run -c config.json > sing-box.log 2>&1 &
           sleep 5
-          
-          # 检查进程是否在运行
-          ps aux | grep sing-box | grep -v grep
+          cat sing-box.log || true
 
-      - name: Ping HuggingFace Space via Hysteria2 proxy
+      - name: Test proxy
+        run: |
+          echo "Testing proxy..."
+          curl -v --max-time 10 --proxy http://127.0.0.1:8080 https://ip.sb 2>&1 || true
+
+      - name: Ping HuggingFace
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          echo "Testing proxy connection..."
-          
-          # 测试代理是否工作
-          TEST_RESULT=$(curl -s --max-time 10 --proxy http://127.0.0.1:8080 https://ip.sb 2>&1)
-          if [ $? -eq 0 ]; then
-            echo "✓ Proxy works. IP: $TEST_RESULT"
-          else
-            echo "⚠️ Proxy test failed, but continuing..."
-          fi
-          
-          echo ""
-          echo "Pinging HuggingFace API..."
-          RESULT=$(curl -s --max-time 30 \
+          curl -s --max-time 30 \
             --proxy http://127.0.0.1:8080 \
             -H "Authorization: Bearer $HF_TOKEN" \
-            "https://huggingface.co/api/spaces/aliliyou/cto")
-          
-          CURL_EXIT=$?
-          
-          if [ $CURL_EXIT -ne 0 ]; then
-            echo "❌ Curl failed with exit code: $CURL_EXIT"
-            echo "Check if proxy is running and HY2 config is correct"
-            exit 1
-          fi
-          
-          echo "API response: $RESULT"
-          
-          STAGE=$(echo "$RESULT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('runtime',{}).get('stage') or d.get('stage') or 'unknown')" 2>/dev/null || echo "unknown")
-          
-          echo "Space stage: $STAGE"
-          
-          if [ "$STAGE" = "RUNNING" ] || [ "$STAGE" = "RUNNING_BUILDING" ]; then
-            echo "✅ Space is running"
-          else
-            echo "⚠️ Space stage=$STAGE"
-          fi
-
-      - name: Show sing-box logs
-        if: failure()
-        run: |
-          echo "=== Checking sing-box process ==="
-          ps aux | grep sing-box
-          echo ""
-          echo "=== Checking port 8080 ==="
-          netstat -tlnp 2>/dev/null | grep 8080 || ss -tlnp | grep 8080
+            "https://huggingface.co/api/spaces/aliliyou/cto" | \
+            python3 -c "import sys,json; d=json.load(sys.stdin); print('Stage:', d.get('runtime',{}).get('stage') or d.get('stage', 'unknown'))"
