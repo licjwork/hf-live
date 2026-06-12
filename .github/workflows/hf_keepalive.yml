@@ -1,4 +1,4 @@
-name: HuggingFace Keepalive with Hysteria2
+name: HuggingFace Keepalive
 
 on:
   schedule:
@@ -24,148 +24,43 @@ jobs:
           wget -q https://github.com/SagerNet/sing-box/releases/download/v1.12.9/sing-box-1.12.9-linux-amd64.tar.gz
           tar -xzf sing-box-*.tar.gz
           sudo mv sing-box-*/sing-box /usr/local/bin/
-          sing-box version
 
-      - name: Parse HY2_URL and generate config
-        env:
-          HY2_URL: ${{ secrets.HY2_URL }}
+      - name: Create config
         run: |
-          python3 << 'PYTHON_SCRIPT'
-          import json
-          import os
-          import re
-          from urllib.parse import urlparse, parse_qs
-          
-          hy2_url = os.environ.get("HY2_URL", "")
-          
-          if not hy2_url:
-              print("❌ HY2_URL not set")
-              exit(1)
-          
-          # 解析 hy2://host:port?auth=password&insecure=1&sni=domain
-          parsed = urlparse(hy2_url)
-          
-          # 提取服务器和端口
-          server = parsed.hostname
-          port = parsed.port if parsed.port else 443
-          
-          # 提取查询参数
-          params = parse_qs(parsed.query)
-          
-          # 认证密码（auth 或 password 参数）
-          password = None
-          if 'auth' in params:
-              password = params['auth'][0]
-          elif 'password' in params:
-              password = params['password'][0]
-          
-          # TLS 设置
-          insecure = 'insecure' in params and params['insecure'][0] in ['1', 'true']
-          sni = params.get('sni', [None])[0]
-          
-          if not server or not password:
-              print(f"❌ Failed to parse HY2_URL: server={server}, password={bool(password)}")
-              exit(1)
-          
-          config = {
-              "inbounds": [
-                  {
-                      "type": "http",
-                      "listen": "127.0.0.1",
-                      "listen_port": 8080
-                  },
-                  {
-                      "type": "socks",
-                      "listen": "127.0.0.1",
-                      "listen_port": 1080
-                  }
-              ],
-              "outbounds": [
-                  {
-                      "type": "hysteria2",
-                      "server": server,
-                      "server_port": port,
-                      "password": password,
-                      "tls": {
-                          "enabled": True,
-                          "insecure": insecure
-                      }
-                  }
-              ]
+          cat > config.json << 'EOF'
+          {
+            "inbounds": [
+              {
+                "type": "http",
+                "listen": "127.0.0.1",
+                "listen_port": 8080
+              }
+            ],
+            "outbounds": [
+              {
+                "type": "hysteria2",
+                "server": "${{ secrets.HY2_SERVER }}",
+                "server_port": ${{ secrets.HY2_PORT }},
+                "password": "${{ secrets.HY2_PASSWORD }}",
+                "tls": {
+                  "insecure": true
+                }
+              }
+            ]
           }
-          
-          # 添加 SNI 如果存在
-          if sni:
-              config["outbounds"][0]["tls"]["server_name"] = sni
-          
-          with open("config.json", "w") as f:
-              json.dump(config, f, indent=2)
-          
-          print("✅ Config generated successfully")
-          print(f"Server: {server}:{port}")
-          print(f"Insecure: {insecure}")
-          if sni:
-              print(f"SNI: {sni}")
-          PYTHON_SCRIPT
-          
-          echo ""
-          echo "=== Generated config ==="
+          EOF
           cat config.json
-          echo ""
-          python3 -m json.tool config.json > /dev/null && echo "✓ JSON valid"
 
-      - name: Start sing-box
+      - name: Start proxy
         run: |
-          sudo /usr/local/bin/sing-box run -c config.json > sing-box.log 2>&1 &
-          sleep 5
-          
-          if ps aux | grep -q "[s]ing-box"; then
-            echo "✓ sing-box running"
-          else
-            echo "✗ sing-box failed to start"
-            cat sing-box.log
-            exit 1
-          fi
+          sudo sing-box run -c config.json &
+          sleep 8
 
-      - name: Test proxy
-        run: |
-          echo "Testing proxy connection..."
-          curl -s --max-time 10 --proxy http://127.0.0.1:8080 https://ip.sb && echo "✓ Proxy works" || echo "⚠️ Proxy test failed"
-
-      - name: Ping HuggingFace Space
+      - name: Keepalive
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          echo "Calling HuggingFace API..."
-          RESPONSE=$(curl -s --max-time 30 \
-            --proxy http://127.0.0.1:8080 \
+          curl -s --proxy http://127.0.0.1:8080 \
             -H "Authorization: Bearer $HF_TOKEN" \
-            "https://huggingface.co/api/spaces/aliliyou/cto")
-          
-          echo "$RESPONSE" | python3 -c "
-import sys, json
-try:
-    data = json.load(sys.stdin)
-    stage = data.get('runtime', {}).get('stage') or data.get('stage', 'unknown')
-    print(f'✅ Space stage: {stage}')
-    if stage in ['RUNNING', 'RUNNING_BUILDING']:
-        print('✅ Keepalive successful')
-    else:
-        print(f'⚠️ Stage is {stage}')
-        sys.exit(1)
-except Exception as e:
-    print(f'❌ Error: {e}')
-    print(f'Response: {sys.stdin.read()}')
-    sys.exit(1)
-"
-
-      - name: Show logs on failure
-        if: failure()
-        run: |
-          echo "=== sing-box log ==="
-          cat sing-box.log 2>/dev/null || echo "No log"
-
-      - name: Stop sing-box
-        if: always()
-        run: |
-          sudo pkill sing-box || true
+            "https://huggingface.co/api/spaces/aliliyou/cto" | \
+            grep -q "RUNNING" && echo "✅ Success" || echo "⚠️ Check"
