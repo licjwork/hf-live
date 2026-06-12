@@ -4,54 +4,45 @@ on:
   schedule:
     - cron: '0 */4 * * *'
   workflow_dispatch:
+    inputs:
+      skip_sleep:
+        description: 'Skip random sleep'
+        required: false
+        default: true
+        type: boolean
 
 jobs:
   ping:
     runs-on: ubuntu-latest
     steps:
       - name: Random sleep between 0 and 4 hours
+        if: ${{ !github.event.inputs.skip_sleep }}
         run: |
-          # MAX_SLEEP=$((RANDOM % 14400))
-          # echo "Sleeping $MAX_SLEEP seconds to randomize interval"
-          # sleep $MAX_SLEEP
+          MAX_SLEEP=$((RANDOM % 14400))
+          echo "Sleeping $MAX_SLEEP seconds to randomize interval"
+          sleep $MAX_SLEEP
 
       - name: Install sing-box
         run: |
-          # 下载最新稳定版 sing-box
-          wget https://github.com/SagerNet/sing-box/releases/download/v1.12.9/sing-box-1.12.9-linux-amd64.tar.gz
+          wget -q https://github.com/SagerNet/sing-box/releases/download/v1.12.9/sing-box-1.12.9-linux-amd64.tar.gz
           tar -xzf sing-box-1.12.9-linux-amd64.tar.gz
           sudo mv sing-box-1.12.9-linux-amd64/sing-box /usr/local/bin/
           sing-box version
 
       - name: Generate Hysteria2 config
-        env:
-          HY2_URL: ${{ secrets.HY2_URL }}
         run: |
-          # 解析 HY2 URL 并生成配置
-          # HY2 URL 格式: hy2://host:port?auth=password&insecure=1&sni=server_name
           cat > config.json << 'EOF'
           {
             "log": {
               "level": "warn",
-              "timestamp": true,
-              "output": "sing-box.log"
+              "timestamp": true
             },
             "inbounds": [
-              {
-                "type": "socks",
-                "tag": "socks-in",
-                "listen": "127.0.0.1",
-                "listen_port": 1080
-              },
               {
                 "type": "http",
                 "tag": "http-in",
                 "listen": "127.0.0.1",
                 "listen_port": 8080
-              },
-              {
-                "type": "direct",
-                "tag": "direct"
               }
             ],
             "outbounds": [
@@ -64,29 +55,19 @@ jobs:
                 "tls": {
                   "enabled": true,
                   "server_name": "${{ secrets.HY2_SNI }}",
-                  "insecure": ${{ secrets.HY2_INSECURE }}
+                  "insecure": ${{ secrets.HY2_INSECURE || 'true' }}
                 }
               }
-            ],
-            "route": {
-              "rules": [
-                {
-                  "outbound": "hy2-out",
-                  "protocol": ["dns"]
-                },
-                {
-                  "outbound": "hy2-out",
-                  "domain_suffix": [
-                    "huggingface.co",
-                    "hf.co",
-                    "github.com"
-                  ]
-                }
-              ],
-              "final": "hy2-out"
-            }
+            ]
           }
           EOF
+          
+          # 验证 JSON 格式
+          echo "Config content:"
+          cat config.json
+          echo ""
+          echo "Validating JSON..."
+          python3 -m json.tool config.json > /dev/null && echo "✓ JSON is valid" || echo "✗ JSON is invalid"
 
       - name: Start sing-box Hysteria2 client
         run: |
@@ -94,20 +75,40 @@ jobs:
           sudo /usr/local/bin/sing-box run -c config.json &
           
           # 等待代理启动
+          echo "Waiting for proxy to start..."
           sleep 5
           
-          # 测试代理是否正常工作
-          echo "Testing proxy connection..."
-          curl -s --max-time 10 --proxy http://127.0.0.1:8080 https://ip.sb || echo "Proxy test failed, continuing anyway..."
+          # 检查进程是否在运行
+          ps aux | grep sing-box | grep -v grep
 
       - name: Ping HuggingFace Space via Hysteria2 proxy
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
+          echo "Testing proxy connection..."
+          
+          # 测试代理是否工作
+          TEST_RESULT=$(curl -s --max-time 10 --proxy http://127.0.0.1:8080 https://ip.sb 2>&1)
+          if [ $? -eq 0 ]; then
+            echo "✓ Proxy works. IP: $TEST_RESULT"
+          else
+            echo "⚠️ Proxy test failed, but continuing..."
+          fi
+          
+          echo ""
+          echo "Pinging HuggingFace API..."
           RESULT=$(curl -s --max-time 30 \
             --proxy http://127.0.0.1:8080 \
             -H "Authorization: Bearer $HF_TOKEN" \
             "https://huggingface.co/api/spaces/aliliyou/cto")
+          
+          CURL_EXIT=$?
+          
+          if [ $CURL_EXIT -ne 0 ]; then
+            echo "❌ Curl failed with exit code: $CURL_EXIT"
+            echo "Check if proxy is running and HY2 config is correct"
+            exit 1
+          fi
           
           echo "API response: $RESULT"
           
@@ -118,11 +119,14 @@ jobs:
           if [ "$STAGE" = "RUNNING" ] || [ "$STAGE" = "RUNNING_BUILDING" ]; then
             echo "✅ Space is running"
           else
-            echo "⚠️  Space stage=$STAGE"
+            echo "⚠️ Space stage=$STAGE"
           fi
 
-      - name: Show sing-box logs (if failed)
+      - name: Show sing-box logs
         if: failure()
         run: |
-          echo "=== sing-box log ==="
-          cat sing-box.log 2>/dev/null || echo "No log file"
+          echo "=== Checking sing-box process ==="
+          ps aux | grep sing-box
+          echo ""
+          echo "=== Checking port 8080 ==="
+          netstat -tlnp 2>/dev/null | grep 8080 || ss -tlnp | grep 8080
