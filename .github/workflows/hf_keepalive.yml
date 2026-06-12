@@ -1,8 +1,8 @@
-name: HuggingFace Keepalive
+name: HuggingFace Keepalive with sing-box + Hysteria2
 
 on:
   schedule:
-    - cron: '0 */4 * * *'   # 每4小时整点触发，再配合随机 sleep 会变成不规则间隔
+    - cron: '0 */4 * * *'
   workflow_dispatch:
 
 jobs:
@@ -11,22 +11,118 @@ jobs:
     steps:
       - name: Random sleep between 0 and 4 hours
         run: |
-          MAX_SLEEP=$((RANDOM % 14400))   # 0 ~ 4 小时随机秒数
+          MAX_SLEEP=$((RANDOM % 14400))
           echo "Sleeping $MAX_SLEEP seconds to randomize interval"
           sleep $MAX_SLEEP
 
-      - name: Ping HuggingFace Space
+      - name: Install sing-box
+        run: |
+          # 下载最新稳定版 sing-box
+          wget https://github.com/SagerNet/sing-box/releases/download/v1.12.9/sing-box-1.12.9-linux-amd64.tar.gz
+          tar -xzf sing-box-1.12.9-linux-amd64.tar.gz
+          sudo mv sing-box-1.12.9-linux-amd64/sing-box /usr/local/bin/
+          sing-box version
+
+      - name: Generate Hysteria2 config
+        env:
+          HY2_URL: ${{ secrets.HY2_URL }}
+        run: |
+          # 解析 HY2 URL 并生成配置
+          # HY2 URL 格式: hy2://host:port?auth=password&insecure=1&sni=server_name
+          cat > config.json << 'EOF'
+          {
+            "log": {
+              "level": "warn",
+              "timestamp": true,
+              "output": "sing-box.log"
+            },
+            "inbounds": [
+              {
+                "type": "socks",
+                "tag": "socks-in",
+                "listen": "127.0.0.1",
+                "listen_port": 1080
+              },
+              {
+                "type": "http",
+                "tag": "http-in",
+                "listen": "127.0.0.1",
+                "listen_port": 8080
+              },
+              {
+                "type": "direct",
+                "tag": "direct"
+              }
+            ],
+            "outbounds": [
+              {
+                "type": "hysteria2",
+                "tag": "hy2-out",
+                "server": "${{ secrets.HY2_SERVER }}",
+                "server_port": ${{ secrets.HY2_PORT }},
+                "password": "${{ secrets.HY2_PASSWORD }}",
+                "tls": {
+                  "enabled": true,
+                  "server_name": "${{ secrets.HY2_SNI }}",
+                  "insecure": ${{ secrets.HY2_INSECURE }}
+                }
+              }
+            ],
+            "route": {
+              "rules": [
+                {
+                  "outbound": "hy2-out",
+                  "protocol": ["dns"]
+                },
+                {
+                  "outbound": "hy2-out",
+                  "domain_suffix": [
+                    "huggingface.co",
+                    "hf.co",
+                    "github.com"
+                  ]
+                }
+              ],
+              "final": "hy2-out"
+            }
+          }
+          EOF
+
+      - name: Start sing-box Hysteria2 client
+        run: |
+          # 后台启动 sing-box
+          sudo /usr/local/bin/sing-box run -c config.json &
+          
+          # 等待代理启动
+          sleep 5
+          
+          # 测试代理是否正常工作
+          echo "Testing proxy connection..."
+          curl -s --max-time 10 --proxy http://127.0.0.1:8080 https://ip.sb || echo "Proxy test failed, continuing anyway..."
+
+      - name: Ping HuggingFace Space via Hysteria2 proxy
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           RESULT=$(curl -s --max-time 30 \
+            --proxy http://127.0.0.1:8080 \
             -H "Authorization: Bearer $HF_TOKEN" \
             "https://huggingface.co/api/spaces/aliliyou/cto")
+          
           echo "API response: $RESULT"
+          
           STAGE=$(echo "$RESULT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('runtime',{}).get('stage') or d.get('stage') or 'unknown')" 2>/dev/null || echo "unknown")
+          
           echo "Space stage: $STAGE"
+          
           if [ "$STAGE" = "RUNNING" ] || [ "$STAGE" = "RUNNING_BUILDING" ]; then
             echo "✅ Space is running"
           else
             echo "⚠️  Space stage=$STAGE"
           fi
+
+      - name: Show sing-box logs (if failed)
+        if: failure()
+        run: |
+          echo "=== sing-box log ==="
+          cat sing-box.log 2>/dev/null || echo "No log file"
