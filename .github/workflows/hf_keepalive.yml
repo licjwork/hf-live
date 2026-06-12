@@ -28,7 +28,7 @@ jobs:
 
       - name: Create config
         run: |
-          cat > config.json << 'EOF'
+          cat > config.json << EOF
           {
             "inbounds": [
               {
@@ -40,9 +40,9 @@ jobs:
             "outbounds": [
               {
                 "type": "hysteria2",
-                "server": "YOUR_SERVER_HERE",
-                "server_port": 443,
-                "password": "YOUR_PASSWORD_HERE",
+                "server": "${{ secrets.HY2_SERVER }}",
+                "server_port": ${{ secrets.HY2_PORT }},
+                "password": "${{ secrets.HY2_PASSWORD }}",
                 "tls": {
                   "insecure": true
                 }
@@ -51,34 +51,63 @@ jobs:
           }
           EOF
           
-          # 替换变量（用 sed 更安全）
-          sed -i "s/YOUR_SERVER_HERE/${{ secrets.HY2_SERVER }}/g" config.json
-          sed -i "s/YOUR_PASSWORD_HERE/${{ secrets.HY2_PASSWORD }}/g" config.json
-          sed -i "s/443/${{ secrets.HY2_PORT }}/g" config.json
-          
-          echo "=== Generated config ==="
+          echo "=== Config content ==="
           cat config.json
           echo ""
-          echo "=== Validating JSON ==="
-          python3 -m json.tool config.json > /dev/null 2>&1 && echo "✓ JSON valid" || echo "✗ JSON invalid"
+          echo "=== Validate JSON ==="
+          cat config.json | python3 -m json.tool > /dev/null 2>&1 && echo "✓ JSON valid" || echo "✗ JSON invalid"
 
-      - name: Start proxy
+      - name: Start sing-box
         run: |
-          sudo /usr/local/bin/sing-box run -c config.json > sing-box.log 2>&1 &
+          sudo /usr/local/bin/sing-box run -c config.json 2>&1 | tee sing-box.log &
+          SB_PID=$!
+          echo "Sing-box PID: $SB_PID"
           sleep 5
-          cat sing-box.log || true
+          
+          echo "=== Sing-box process ==="
+          ps aux | grep sing-box | grep -v grep
+          
+          echo "=== Sing-box log (first 20 lines) ==="
+          head -20 sing-box.log 2>/dev/null || echo "No log yet"
 
-      - name: Test proxy
+      - name: Test proxy connectivity
         run: |
-          echo "Testing proxy..."
-          curl -v --max-time 10 --proxy http://127.0.0.1:8080 https://ip.sb 2>&1 || true
+          echo "=== Test 1: Direct connection (no proxy) ==="
+          curl -s --max-time 5 https://ip.sb || echo "Direct connection failed"
+          
+          echo ""
+          echo "=== Test 2: Through proxy ==="
+          curl -v --max-time 10 --proxy http://127.0.0.1:8080 https://ip.sb 2>&1
+          
+          echo ""
+          echo "=== Test 3: Check proxy port ==="
+          netstat -tlnp 2>/dev/null | grep 8080 || ss -tlnp | grep 8080 || echo "Port 8080 not listening"
 
       - name: Ping HuggingFace
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          curl -s --max-time 30 \
+          echo "=== Calling HuggingFace API ==="
+          RESPONSE=$(curl -v --max-time 30 \
             --proxy http://127.0.0.1:8080 \
             -H "Authorization: Bearer $HF_TOKEN" \
-            "https://huggingface.co/api/spaces/aliliyou/cto" | \
-            python3 -c "import sys,json; d=json.load(sys.stdin); print('Stage:', d.get('runtime',{}).get('stage') or d.get('stage', 'unknown'))"
+            "https://huggingface.co/api/spaces/aliliyou/cto" 2>&1)
+          
+          CURL_EXIT=$?
+          echo "Curl exit code: $CURL_EXIT"
+          echo ""
+          echo "=== Response (first 500 chars) ==="
+          echo "$RESPONSE" | head -c 500
+          echo ""
+          
+          if [ $CURL_EXIT -eq 0 ]; then
+            echo "$RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print('Stage:', d.get('runtime',{}).get('stage') or d.get('stage', 'unknown'))" 2>&1
+          else
+            echo "❌ API call failed"
+          fi
+
+      - name: Show full log on failure
+        if: failure()
+        run: |
+          echo "=== Full sing-box log ==="
+          cat sing-box.log 2>/dev/null || echo "No log file"
