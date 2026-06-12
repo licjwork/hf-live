@@ -11,9 +11,9 @@ jobs:
     steps:
       - name: Random sleep between 0 and 4 hours
         run: |
-          MAX_SLEEP=$((RANDOM % 14400))
-          echo "Sleeping $MAX_SLEEP seconds to randomize interval"
-          sleep $MAX_SLEEP
+          # MAX_SLEEP=$((RANDOM % 14400))
+          # echo "Sleeping $MAX_SLEEP seconds to randomize interval"
+          # sleep $MAX_SLEEP
 
       - name: Install sing-box
         run: |
