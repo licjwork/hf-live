@@ -2,13 +2,19 @@ name: HuggingFace Keepalive
 
 on:
   schedule:
-    - cron: '0 * * * *'
+    - cron: '0 */4 * * *'   # 每4小时整点触发，再配合随机 sleep 会变成不规则间隔
   workflow_dispatch:
 
 jobs:
   ping:
     runs-on: ubuntu-latest
     steps:
+      - name: Random sleep between 0 and 4 hours
+        run: |
+          MAX_SLEEP=$((RANDOM % 14400))   # 0 ~ 4 小时随机秒数
+          echo "Sleeping $MAX_SLEEP seconds to randomize interval"
+          sleep $MAX_SLEEP
+
       - name: Ping HuggingFace Space
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
