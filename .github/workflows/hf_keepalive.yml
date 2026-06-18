@@ -124,18 +124,14 @@ jobs:
         run: |
           export ALL_PROXY=socks5://127.0.0.1:1080
 
-          RESULT=$(curl -s --max-time 30 \
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 \
             -H "Authorization: Bearer $HF_TOKEN" \
-            https://huggingface.co/api/spaces/aliliyou/cto)
+            https://aliliyou-cto.hf.space)
 
-          echo "$RESULT"
+          echo "HTTP Status: $STATUS"
 
-          STAGE=$(echo "$RESULT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('runtime',{}).get('stage') or d.get('stage') or 'unknown')" 2>/dev/null || echo "unknown")
-
-          echo "Stage: $STAGE"
-
-          if [ "$STAGE" = "RUNNING" ] || [ "$STAGE" = "RUNNING_BUILDING" ]; then
-            echo "✅ Space is running"
+          if [ "$STATUS" = "200" ] || [ "$STATUS" = "302" ] || [ "$STATUS" = "301" ]; then
+            echo "✅ Space is running (HTTP $STATUS)"
           else
-            echo "⚠️ Space stage=$STAGE"
+            echo "⚠️ Space returned HTTP $STATUS"
           fi
