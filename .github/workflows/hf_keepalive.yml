@@ -135,3 +135,44 @@ jobs:
           else
             echo "⚠️ Space returned HTTP $STATUS"
           fi
+
+      # =========================
+      # 7. 检查账号列表，为空则添加
+      # =========================
+      - name: Ensure accounts exist
+        shell: bash
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_ACCOUNTS: ${{ secrets.HF_ACCOUNTS }}
+        run: |
+          export ALL_PROXY=socks5://127.0.0.1:1080
+
+          PAGE=$(curl -s --max-time 30 \
+            -H "Authorization: Bearer $HF_TOKEN" \
+            https://aliliyou-cto.hf.space)
+
+          ROWS=$(echo "$PAGE" | grep -c '<tr>' || true)
+          # 表头占 1 行，如果总行数 <= 1 说明没有账号
+          if [ "$ROWS" -le 1 ]; then
+            echo "⚠️ 账号列表为空，开始添加账号..."
+
+            echo "$HF_ACCOUNTS" | jq -c '.[]' | while read -r ACCOUNT; do
+              LABEL=$(echo "$ACCOUNT" | jq -r '.label')
+              BIZ_ID=$(echo "$ACCOUNT" | jq -r '.business_id')
+              USERNAME=$(echo "$ACCOUNT" | jq -r '.github_username')
+              PASSWORD=$(echo "$ACCOUNT" | jq -r '.github_password')
+              ACTIVE_START=$(echo "$ACCOUNT" | jq -r '.active_start')
+              ACTIVE_END=$(echo "$ACCOUNT" | jq -r '.active_end')
+
+              echo "Adding account: $LABEL"
+
+              curl -s -X POST --max-time 30 \
+                -H "Authorization: Bearer $HF_TOKEN" \
+                -d "label=${LABEL}&business_id=${BIZ_ID}&github_username=${USERNAME}&github_password=${PASSWORD}&active_start=${ACTIVE_START}&active_end=${ACTIVE_END}" \
+                https://aliliyou-cto.hf.space/account/add
+
+              echo "✅ Added: $LABEL"
+            done
+          else
+            echo "✅ 账号列表已有数据 (${ROWS} rows)，跳过添加"
+          fi
