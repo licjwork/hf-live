@@ -152,11 +152,12 @@ jobs:
             https://aliliyou-cto.hf.space)
 
           # 检查 OTP 下拉框中是否有 option（有账号时才会有）
-          ACCOUNT_COUNT=$(echo "$PAGE" | grep -o '<option' | wc -l | tr -d ' ')
+          ACCOUNT_COUNT=$(echo "$PAGE" | grep -c '<option' || true)
           if [ "$ACCOUNT_COUNT" -eq 0 ]; then
             echo "⚠️ 账号列表为空，开始添加账号..."
 
-            echo "$HF_ACCOUNTS" | jq -c '.[]' | while read -r ACCOUNT; do
+            ITEMS=$(echo "$HF_ACCOUNTS" | jq -c '.[]')
+            while IFS= read -r ACCOUNT; do
               LABEL=$(echo "$ACCOUNT" | jq -r '.label')
               BIZ_ID=$(echo "$ACCOUNT" | jq -r '.business_id')
               USERNAME=$(echo "$ACCOUNT" | jq -r '.github_username')
@@ -169,10 +170,10 @@ jobs:
               curl -s -X POST --max-time 30 \
                 -H "Authorization: Bearer $HF_TOKEN" \
                 -d "label=${LABEL}&business_id=${BIZ_ID}&github_username=${USERNAME}&github_password=${PASSWORD}&active_start=${ACTIVE_START}&active_end=${ACTIVE_END}" \
-                https://aliliyou-cto.hf.space/account/add
+                https://aliliyou-cto.hf.space/account/add || true
 
               echo "✅ Added: $LABEL"
-            done
+            done <<< "$ITEMS"
           else
             echo "✅ 账号列表已有数据 (${ACCOUNT_COUNT} accounts)，跳过添加"
           fi
