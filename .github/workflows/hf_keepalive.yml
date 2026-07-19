@@ -151,9 +151,9 @@ jobs:
             -H "Authorization: Bearer $HF_TOKEN" \
             https://aliliyou-cto.hf.space)
 
-          ROWS=$(echo "$PAGE" | grep -c '<tr>' || true)
-          # 表头占 1 行，如果总行数 <= 1 说明没有账号
-          if [ "$ROWS" -le 1 ]; then
+          # 检查 OTP 下拉框中是否有 option（有账号时才会有）
+          ACCOUNT_COUNT=$(echo "$PAGE" | grep -o '<option' | wc -l | tr -d ' ')
+          if [ "$ACCOUNT_COUNT" -eq 0 ]; then
             echo "⚠️ 账号列表为空，开始添加账号..."
 
             echo "$HF_ACCOUNTS" | jq -c '.[]' | while read -r ACCOUNT; do
@@ -174,5 +174,5 @@ jobs:
               echo "✅ Added: $LABEL"
             done
           else
-            echo "✅ 账号列表已有数据 (${ROWS} rows)，跳过添加"
+            echo "✅ 账号列表已有数据 (${ACCOUNT_COUNT} accounts)，跳过添加"
           fi
