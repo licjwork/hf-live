@@ -1,8 +1,8 @@
 name: HuggingFace KeepAlive
 
 on:
-  schedule:
-    - cron: "0 */4 * * *"
+  # schedule:
+  #   - cron: "0 */4 * * *"
 
   workflow_dispatch:
     inputs:
